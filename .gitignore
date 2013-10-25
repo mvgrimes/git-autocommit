@@ -1,0 +1,29 @@
+# Swap files/backups
+.*.swp
+.*.swo
+
+# Build files, etc
+.build
+META.yml
+!META.json
+MYMETA.yml
+MYMETA.json
+blib/
+Build
+_build/
+pm_to_blib
+MANIFEST
+MANIFEST.bak
+Changes.bak
+nytprof*
+.local-v*
+README
+Git-AutoCommit-*
+
+# Temporary/experimental
+exp/
+tmp/
+test/
+
+# podweaver backups
+*.pm.bak
