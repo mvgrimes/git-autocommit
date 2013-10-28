@@ -13,6 +13,20 @@ $|++;
 Log::Any::Adapter->set( 'ScreenColoredLevel', min_level => 'debug' );
 $log->debugf("client: model is $AnyEvent::MODEL");
 
+# To publish:
+# Create AnyEvent::RabbitMQ
+# Open Channel
+# Declare Exchange
+# Publish
+
+# To subscribe:
+# Create AnyEvent::RabbitMQ
+# Open Channel
+# Declare Exchange
+# Declare Queue
+# Bind Queue to Exchange
+# Create Consumer
+
 my $cv = AnyEvent->condvar;
 my $ar = AnyEvent::RabbitMQ->new;
 $ar->load_xml_spec->connect(
@@ -100,13 +114,14 @@ $channel->consume(
     ## consumer_tag => ,
     on_consume => sub {
         my ($frame) = @_;
+
+        ## p $frame;
         my $body = $frame->{body}->payload;
 
-        # p $frame;
         ## my $reply_to = $frame->{header}->reply_to;
-        my $topic    = $frame->{deliver}->method_frame->routing_key;
+        ## my $topic    = $frame->{deliver}->method_frame->routing_key;
+        ## $log->infof("[client] topic is %s", $topic);
         ## return if $reply_to && $reply_to eq $self->_rf_queue;
-        $log->infof("[client] topic is %s", $topic);
 
         if ( $frame->{header}->headers->{publisher} eq
             sprintf( "%s.%s", hostname, $$ ) )
@@ -114,8 +129,8 @@ $channel->consume(
             $log->debugf("[client] skipping msg from self");
         } else {
             my $json = JSON->new();
-            my $message = $json->decode( $body )->{message};
-            $log->debugf( "[client] receved msg: " . $message );
+            my $message = $json->decode( $body );
+            $log->debugf( "[client] receved msg: " . p $message );
         }
     },
     on_success => sub {
@@ -143,25 +158,6 @@ $channel->bind_queue(
     },
 );
 $cv->recv or die "Unable to open channel";
-
-my $w = AnyEvent->timer(
-    after    => 2,
-    interval => 2,
-    cb       => sub {
-        my $i = int( rand(1000) );
-        $log->debugf("[client] sending message $i");
-
-        my $json = JSON->new;
-        my $body = $json->encode( { message => $i, } );
-
-        $channel->publish(
-            exchange    => 'test_exchange',
-            routing_key => 'test.me',
-            header =>
-              { headers => { publisher => sprintf "%s.%s", hostname, $$ } },
-            body => $body,
-        );
-    } );
 
 # Enter event loop
 $log->infof("[client] entering loop");

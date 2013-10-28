@@ -10,7 +10,8 @@ use mro;
 use AnyEvent;
 use AnyEvent::Filesys::Notify;
 use App::Git::AutoCommit -command;
-use Git::AutoCommit::Watcher;
+use Git::AutoCommit::FileWatcher;
+use Git::AutoCommit::MessageQueue;
 use Config::General;
 use Data::Printer;
 use Log::Any qw($log);
@@ -47,13 +48,19 @@ sub execute {
         $self->usage_error("Bad repository specified on command line: $repo")
           unless exists $repositories->{$repo};
 
+        my $mq = Git::AutoCommit::MessageQueue->new();
+
         # Merge the global config with the Repository specific config
+        my $json = JSON->new;
         my $repo_config =
-          { %{ $config->{Global} }, %{ $repositories->{$repo} }, };
+          { %{ $config->{Global} }, %{ $repositories->{$repo} },
+              on_commit => sub { $mq->publish( $json->encode( \@_ ) ) },
+              on_=> sub { $mq->publish( $json->encode( \@_ ) ) },
+          };
 
         $log->debugf( "AGAW [%s] watching path: %s", $repo,
             $repo_config->{path} );
-        my $watcher = Git::AutoCommit::Watcher->new($repo_config);
+        my $watcher = Git::AutoCommit::FileWatcher->new($repo_config);
 
         push @watchers, $watcher;
     }

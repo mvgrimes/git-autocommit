@@ -1,31 +1,39 @@
-package Git::AutoCommit::Watcher;
+package Git::AutoCommit::FileWatcher;
 
 use 5.014;
 use strict;
 use warnings;
 use Moo;
 use Type::Tiny;
-use Types::Standard qw(ArrayRef Str Int Bool);
+use Types::Standard qw(ArrayRef Str Int Bool CodeRef);
 use Try::Tiny;
 use Data::Dump qw(pp);
 use Data::Printer;
 use Log::Any qw($log);
 use Sys::Hostname;
-use Git::Wrapper;    # XXXX: Explore Git::Wrapper;
+use Git::Wrapper;    # XXXX: Explore Git::Wrapper AnyEvent;
 
 # TODO: Could use VCI::VCS to support non-git vcs
 
 has path => ( is => 'ro', isa => Str, required => 1 );
-has git      => ( is => 'ro', builder => 1, lazy => 1 );
-has notifier => ( is => 'ro', builder => 1, lazy => 1 );
-has commit_wait   => ( is => 'ro', isa => Int,      default => 5 );
-has commit_timers => ( is => 'rw', isa => ArrayRef, default => sub { [] } );
-has pushable => ( is => 'ro', isa => Bool,  builder=>1, lazy => 1);
-has push_wait     => ( is => 'ro', isa => Int,      default => 5 );
-has push_timers   => ( is => 'rw', isa => ArrayRef, default => sub { [] } );
-has messages => ( is => 'rw', isa => ArrayRef [Str], default => sub { [] } );
+has git => ( is => 'ro', builder => 1, lazy => 1 );
 
-sub _build_notifier {
+has file_watcher => ( is => 'ro', builder => 1, lazy => 1 );
+has on_add       => ( is => 'ro', isa     => CodeRef, );
+has on_rm        => ( is => 'ro', isa     => CodeRef, );
+
+has commit_wait => ( is => 'ro', isa => Int, default => 5 );
+has commit_timers => ( is => 'rw', isa => ArrayRef, default => sub { [] } );
+has commit_messages =>
+  ( is => 'rw', isa => ArrayRef [Str], default => sub { [] } );
+has on_commit => ( is => 'ro', isa => CodeRef, );
+
+has pushable => ( is => 'ro', isa => Bool, builder => 1, lazy => 1 );
+has push_wait => ( is => 'ro', isa => Int, default => 5 );
+has push_timers => ( is => 'rw', isa => ArrayRef, default => sub { [] } );
+has on_push => ( is => 'ro', isa => CodeRef, );
+
+sub _build_file_watcher {
     my ($self) = @_;
 
     $log->debugf( "GACW [%s] creating AEFN", $self->path );
@@ -49,7 +57,7 @@ sub _build_git {
 sub _build_pushable {
     my ($self) = @_;
 
-    my $remote_branches = $self->git->branch({ r => 1 });
+    my $remote_branches = $self->git->branch( { r => 1 } );
     return $remote_branches ? 1 : 0;
 }
 
@@ -68,15 +76,19 @@ sub on_filesys_change {
 
         my $action = $action_map->{ $event->type }
           or die "Unable to process event type: @{[ $event->type ]}";
+        my $on_action = "on_$action";
 
         # Respond to action with git add/rm/etc
         $log->infof( "GACW [%s] git %s on %s",
             $self->path, $action, $event->path );
         $self->git->$action( $event->path );
 
+        $self->$on_action->( $self->path, $event->path, $action )
+          if $self->$on_action;
+
         # Add a message to queue for the next commit
         my $msg = sprintf "%s %s", $event->type, $event->path;
-        push $self->messages, $msg;
+        push $self->commit_messages, $msg;
 
         # Start count down timer to commit
         my $w = AnyEvent->timer(
@@ -109,10 +121,11 @@ sub do_commit {
     # Do the commit
     $log->infof( "GACW [%s] git commit", $self->path );
     my $msg = sprintf( "AutoCommit on %s\n\n", hostname() )
-      . join( "\n", @{ $self->messages } );
+      . join( "\n", @{ $self->commit_messages } );
 
     try {
         $self->git->commit( { message => $msg } );
+        $self->on_commit->( $self->path, $msg ) if $self->on_commit;
     }
     catch {
         # TODO: What if conflict?
@@ -120,7 +133,7 @@ sub do_commit {
         # TODO: Push timer back on queue
         die p $_;
     };
-    $self->messages( [] );    # Empty the msg queue
+    $self->commit_messages( [] );    # Empty the msg queue
 
     return unless $self->pushable;
 
@@ -148,6 +161,7 @@ sub do_push {
     $log->infof( "GACW [%s] git push", $self->path );
     try {
         $self->git->push();
+        $self->on_push->( $self->path ) if $self->on_push;
     }
     catch {
         die p $_;
@@ -157,8 +171,8 @@ sub do_push {
 sub BUILD {
     my ($self) = @_;
 
-    # Retrieve the notifier to ensure it isn't too lazy
-    my $watch = $self->notifier;
+    # Retrieve the file watcher to ensure it isn't too lazy
+    my $watch = $self->file_watcher;
 }
 
 1;
