@@ -1,0 +1,39 @@
+#!/usr/bin/env perl
+
+use 5.014;
+use strict;
+use warnings;
+
+use AnyEvent;
+use Git::AutoCommit::MessageQueue;
+use Config::General;
+use Data::Printer;
+use Log::Any qw($log);
+use Log::Any::Adapter;
+use JSON;
+
+Log::Any::Adapter->set( 'ScreenColoredLevel', min_level => 'debug' );
+
+sub execute {
+    my ( $self, $opt, $args ) = @_;
+
+    # my $config = $self->get_config($opt);
+
+    my $mq = Git::AutoCommit::MessageQueue->new();
+
+    # Merge the global config with the Repository specific config
+    my $json = JSON->new;
+
+    $mq->subscribe( {
+            cb => sub {
+                my $message = shift // 'na';
+                $log->infof("[mq-subscriber] received: $message");
+              }
+        } );
+}
+
+caller or execute();
+
+# Enter event loop
+$log->infof("[mq-subscriber] entering loop");
+AnyEvent->condvar->recv;

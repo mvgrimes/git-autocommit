@@ -33,10 +33,13 @@ has push_wait => ( is => 'ro', isa => Int, default => 5 );
 has push_timers => ( is => 'rw', isa => ArrayRef, default => sub { [] } );
 has on_push => ( is => 'ro', isa => CodeRef, );
 
+sub _on {
+}
+
 sub _build_file_watcher {
     my ($self) = @_;
 
-    $log->debugf( "GACW [%s] creating AEFN", $self->path );
+    $log->debugf( "[GACW] '%s' creating AEFN", $self->path );
     return AnyEvent::Filesys::Notify->new(
         dirs   => [ $self->path ],
         cb     => sub { $self->on_filesys_change(@_) },
@@ -50,7 +53,7 @@ sub _build_file_watcher {
 sub _build_git {
     my ($self) = @_;
 
-    $log->debugf( "GACW [%s] creating a Git::Wrapper", $self->path );
+    $log->debugf( "[GACW] '%s' creating a Git::Wrapper", $self->path );
     return Git::Wrapper->new( $self->path );
 }
 
@@ -71,7 +74,7 @@ sub on_filesys_change {
     };
 
     for my $event (@events) {
-        $log->debugf( "GACW [%s] %s: %s",
+        $log->debugf( "[GACW] '%s' %s: %s",
             $self->path, $event->type, $event->path );
 
         my $action = $action_map->{ $event->type }
@@ -79,7 +82,7 @@ sub on_filesys_change {
         my $on_action = "on_$action";
 
         # Respond to action with git add/rm/etc
-        $log->infof( "GACW [%s] git %s on %s",
+        $log->infof( "[GACW] '%s' git %s on %s",
             $self->path, $action, $event->path );
         $self->git->$action( $event->path );
 
@@ -113,13 +116,13 @@ sub do_commit {
 
     # Make sure the repos need committing
     if ( not $self->git->status->is_dirty ) {
-        $log->infof( "GACW [%s] do_commit event but repos isn't dirty",
+        $log->infof( "[GACW] '%s' do_commit event but repos isn't dirty",
             $self->path );
         return;
     }
 
     # Do the commit
-    $log->infof( "GACW [%s] git commit", $self->path );
+    $log->infof( "[GACW] '%s' git commit", $self->path );
     my $msg = sprintf( "AutoCommit on %s\n\n", hostname() )
       . join( "\n", @{ $self->commit_messages } );
 
@@ -158,7 +161,7 @@ sub do_push {
     return if @{ $self->push_timers };
 
     # Do the commit
-    $log->infof( "GACW [%s] git push", $self->path );
+    $log->infof( "[GACW] '%s' git push", $self->path );
     try {
         $self->git->push();
         $self->on_push->( $self->path ) if $self->on_push;

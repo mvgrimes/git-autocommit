@@ -53,12 +53,12 @@ sub execute {
         # Merge the global config with the Repository specific config
         my $json = JSON->new;
         my $repo_config =
-          { %{ $config->{Global} }, %{ $repositories->{$repo} },
+          { %{ $config->{Global} // {} }, %{ $repositories->{$repo} },
               on_commit => sub { $mq->publish( $json->encode( \@_ ) ) },
-              on_=> sub { $mq->publish( $json->encode( \@_ ) ) },
+              on_push => sub { $mq->publish( $json->encode( \@_ ) ) },
           };
 
-        $log->debugf( "AGAW [%s] watching path: %s", $repo,
+        $log->debugf( "[AGAW] '%s' watching path: %s", $repo,
             $repo_config->{path} );
         my $watcher = Git::AutoCommit::FileWatcher->new($repo_config);
 

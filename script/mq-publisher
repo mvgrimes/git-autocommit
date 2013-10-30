@@ -1,0 +1,47 @@
+#!/usr/bin/env perl
+
+use 5.014;
+use strict;
+use warnings;
+
+use AnyEvent;
+use Git::AutoCommit::MessageQueue;
+use Config::General;
+use Data::Printer;
+use Log::Any qw($log);
+use Log::Any::Adapter;
+use JSON;
+
+Log::Any::Adapter->set( 'ScreenColoredLevel', min_level => 'debug' );
+
+sub execute {
+    my ( $self, $opt, $args ) = @_;
+
+    # my $config = $self->get_config($opt);
+
+    my $mq = Git::AutoCommit::MessageQueue->new();
+
+    # Merge the global config with the Repository specific config
+    my $json = JSON->new;
+
+    my $seconds = 2;
+    state $count;
+    my $w = AnyEvent->timer(
+        after    => $seconds,
+        interval => $seconds,
+        cb       => sub {
+            my $msg = $json->encode( {
+                message => 'this is a test message',
+                count   => $count++,
+            } );
+            $mq->publish($msg);
+        } );
+
+    return $w;
+}
+
+my $w = execute();
+
+# Enter event loop
+$log->infof("[mq-publiser] entering loop");
+AnyEvent->condvar->recv;

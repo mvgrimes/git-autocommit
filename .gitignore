@@ -27,3 +27,4 @@ test/
 
 # podweaver backups
 *.pm.bak
+Session.vim
