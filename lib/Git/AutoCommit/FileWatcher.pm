@@ -106,6 +106,7 @@ sub do_commit {
     return unless $self->commit_timers->count > 0;
 
     # Get the next timer from the queue
+    # XXXX: Assumes that this is the timer which initiated the callback
     my $w = $self->commit_timers->shift;
 
     # If there are other timers on the queue, then we haven't had a pause

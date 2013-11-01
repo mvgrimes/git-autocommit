@@ -75,6 +75,20 @@ sub execute {
                   }
             } );
 
+        $mq->subscribe( {
+                ignore_self => 1,
+                topic => 'pull',
+                cb => sub {
+                    p @_;
+                    # my $msg     = shift;
+                    # my $subject = sprintf "Repository %s event: %s\n%s",
+                    #   $msg->{repos},
+                    #   $msg->{action},
+                    #   ( exists $msg->{path} ? $msg->{path} : $msg->{message} );
+                    # notify( 'Git AutoCommit', $subject );
+                  }
+            } );
+
         push @watchers, $watcher;
     }
 

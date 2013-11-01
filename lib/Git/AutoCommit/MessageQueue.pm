@@ -16,9 +16,6 @@ use JSON;
 
 has mq => ( is => 'ro', builder => 1, );
 has channel => ( is => 'rw', );    # isa => 'AnyEvent::RabbitMQ::Channel', );
-has queue => ( is => 'rw', isa => Str );
-
-# has queue_name => ( is => 'rw', isa => Str, buider => 1 );
 
 has host     => ( is => 'ro', isa => Str, default => sub { 'localhost' } );
 has port     => ( is => 'ro', isa => Int, default => sub { 5672 } );
@@ -28,6 +25,7 @@ has vhost    => ( is => 'ro', isa => Str, default => sub { '/' } );
 has exchange => ( is => 'ro', isa => Str, default => sub { 'test_exchange' } );
 
 has id => ( is => 'ro', isa => Str, builder => 1, lazy => 1, );
+has is_openning ( is => 'rw', isa => Bool, default => sub { 0 } );
 
 # To publish:
 # Create AnyEvent::RabbitMQ
@@ -55,12 +53,6 @@ sub _build_id {
     sprintf( "%s.%s", hostname, $$ );
 }
 
-# sub _build_queue_name {
-#     my ($self) = @_;
-#
-#     return sprintf "%s.%s.%s", hostname, $$, int(rand(10_000));
-# }
-
 # Publish and Consume: Connect, Open Channel and Create Exchange
 
 sub _connect {
@@ -81,7 +73,7 @@ sub _connect {
         },
         on_failure => sub {
             $log->debugf("[GAMQ] connect failed");
-            die "Unable to connect";
+            die "Unable to connect: @_";
         },
     );
 }
@@ -106,27 +98,29 @@ sub _open_channel {
 
     $log->debugf("[GAMQ] creating channel");
 
+    return if $self->is_opening;
+
     $self->mq->open_channel(
         on_success => sub {
             my $channel = shift;
             $log->debugf("[GAMQ] open_channel succeeded");
             $self->channel($channel);
+            $self->is_opening(0);
             $args->{cb}->() if $args->{cb};
         },
         on_failure => sub {
             $log->debugf("[GAMQ] open_channel failed");
+            $self->is_opening(0);
             die "Unable to open channel";
         },
         on_close => sub {
             my $method_frame = shift->method_frame;
+
             $log->warnf( "[GAMQ] channel closed (%s): %s",
                 $method_frame->reply_code, $method_frame->reply_text );
 
             $self->channel(undef);
-            $self->queue(undef);
-
-            # $self->clear_channel;
-            # $self->clear_queue;
+            $self->is_opening(0);
         },
     );
 
@@ -204,7 +198,11 @@ sub _publish {
 sub declare_queue {
     my ( $self, $args ) = @_;
 
-    if ( $self->channel && $self->channel->is_opn ) {
+    $log->debugf( '[GAMQ] declare_queue self '. $self );
+    $log->debugf( '[GAMQ] declare_queue channel %s is open %s',
+        $self->channel // 'undef', $self->channel && $self->channel->is_open // 'undef');
+
+    if ( $self->channel && $self->channel->is_open ) {
         $self->_declare_queue($args);
     } else {
         $self->declare_exchange( {
@@ -225,13 +223,14 @@ sub _declare_queue {
         ## exchange => $self->exchange,
         ## passive => 1,
         durable => 0,    # Would write messages to disk
-        ## queue       => $self->queue_name,
+        ## queue       => $args->{queue},
         auto_delete => 1,
         on_success  => sub {
             my $method = shift;
             my $queue  = $method->method_frame->queue;
             $log->debugf("[GAMQ] declare_queue succeeded: $queue");
-            $self->queue($queue);
+
+            $args->{queue} = $queue;
 
             # queue must always be bound, so let the bind method call the
             # original cb if/when successful
@@ -253,7 +252,7 @@ sub bind_queue_to_exchange {
         $self->exchange, $topic_str );
 
     $self->channel->bind_queue(
-        queue       => $self->queue,
+        queue       => $args->{queue},
         exchange    => $self->exchange,
         routing_key => $topic_str,
         on_success  => sub {
@@ -272,22 +271,18 @@ sub subscribe {
 
     $log->debugf("[GAMQ] creating consumer");
 
-    if ( $self->queue ) {
-        $self->_create_consumer($args);
-    } else {
-        $self->declare_queue( {
-                cb => sub {
-                    $self->_create_consumer($args);
-                  }
-            } );
-    }
+    $self->declare_queue( {
+            cb => sub {
+                $self->_create_consumer($args);
+              }
+        } );
 }
 
 sub _create_consumer {
     my ( $self, $args ) = @_;
 
     $self->channel->consume(
-        queue  => $self->queue,
+        queue  => $args->{queue},
         no_ack => 1,
         ## consumer_tag => ,
         on_consume => sub {
@@ -302,13 +297,14 @@ sub _create_consumer {
             ## p $frame;
             ## my $reply_to = $frame->{header}->reply_to;
             ## return if $reply_to && $reply_to eq $self->_rf_queue;
+
             my $topic = $frame->{deliver}->method_frame->routing_key;
             $log->infof( "[GAMQ] topic is %s", $topic );
+
             my $publisher = $frame->{header}->headers->{publisher};
 
-            if ( $publisher eq $self->id ) {
+            if ( $args->{ignore_self} and $publisher eq $self->id ) {
                 $log->debugf("[GAMQ] skipping msg from self");
-                $args->{cb}->($msg) if $args->{cb}; # XXXX: testing
             } else {
                 $args->{cb}->($msg) if $args->{cb};
             }
