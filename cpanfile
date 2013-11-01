@@ -11,6 +11,7 @@ requires 'Try::Tiny';
 
 requires 'Moo',           '1.001';
 requires 'MooX::late',    '0.014';
+requires 'Data::Perl',    '0.002007';
 requires 'FindBin::libs', '0';
 requires 'Type::Tiny';
 requires 'Types::Standard',                       '0.001';

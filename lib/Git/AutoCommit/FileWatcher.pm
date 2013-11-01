@@ -6,6 +6,7 @@ use warnings;
 use Moo;
 use Type::Tiny;
 use Types::Standard qw(ArrayRef Str Int Bool CodeRef);
+use Data::Perl qw(array);
 use Try::Tiny;
 use Data::Dump qw(pp);
 use Data::Printer;
@@ -23,14 +24,13 @@ has on_add       => ( is => 'ro', isa     => CodeRef, );
 has on_rm        => ( is => 'ro', isa     => CodeRef, );
 
 has commit_wait => ( is => 'ro', isa => Int, default => 5 );
-has commit_timers => ( is => 'rw', isa => ArrayRef, default => sub { [] } );
-has commit_messages =>
-  ( is => 'rw', isa => ArrayRef [Str], default => sub { [] } );
+has commit_timers => ( is => 'ro', default => sub { array } );
+has commit_messages => ( is => 'ro',  default => sub { array } );
 has on_commit => ( is => 'ro', isa => CodeRef, );
 
 has pushable => ( is => 'ro', isa => Bool, builder => 1, lazy => 1 );
 has push_wait => ( is => 'ro', isa => Int, default => 5 );
-has push_timers => ( is => 'rw', isa => ArrayRef, default => sub { [] } );
+has push_timers => ( is => 'ro',  default => sub { array } );
 has on_push => ( is => 'ro', isa => CodeRef, );
 
 sub _on {
@@ -91,13 +91,13 @@ sub on_filesys_change {
 
         # Add a message to queue for the next commit
         my $msg = sprintf "%s %s", $event->type, $event->path;
-        push $self->commit_messages, $msg;
+        $self->commit_messages->push( $msg );
 
         # Start count down timer to commit
         my $w = AnyEvent->timer(
             after => $self->commit_wait,
             cb    => sub { $self->do_commit } );
-        push $self->commit_timers, $w;
+        $self->commit_timers->push( $w );
     }
 }
 
@@ -105,14 +105,14 @@ sub do_commit {
     my ($self) = @_;
 
     # Do nothing if there is no timer on the queue
-    return unless @{ $self->commit_timers };
+    return unless $self->commit_timers->count > 0;
 
     # Get the next timer from the queue
-    my $w = shift $self->commit_timers;
+    my $w = $self->commit_timers->shift;
 
     # If there are other timers on the queue, then we haven't had a pause
     # in activity for commit_wait time yet.
-    return if @{ $self->commit_timers };
+    return if $self->commit_timers->count > 0;
 
     # Make sure the repos need committing
     if ( not $self->git->status->is_dirty ) {
@@ -124,7 +124,7 @@ sub do_commit {
     # Do the commit
     $log->infof( "[GACW] '%s' git commit", $self->path );
     my $msg = sprintf( "AutoCommit on %s\n\n", hostname() )
-      . join( "\n", @{ $self->commit_messages } );
+      . join( "\n", $self->commit_messages->all );
 
     try {
         $self->git->commit( { message => $msg } );
@@ -136,7 +136,7 @@ sub do_commit {
         # TODO: Push timer back on queue
         die p $_;
     };
-    $self->commit_messages( [] );    # Empty the msg queue
+    $self->commit_messages->clear;    # Empty the msg queue
 
     return unless $self->pushable;
 
@@ -144,21 +144,21 @@ sub do_commit {
     my $push_timer = AnyEvent->timer(
         after => $self->push_wait,
         cb    => sub { $self->do_push } );
-    push $self->push_timers, $push_timer;
+    $self->push_timers->push( $push_timer );
 }
 
 sub do_push {
     my ($self) = @_;
 
     # Do nothing if there is no timer on the queue
-    return unless @{ $self->push_timers };
+    return unless $self->push_timers->count > 0;
 
     # Get the next timer from the queue
-    my $w = shift $self->push_timers;
+    my $w = $self->push_timers->shift;
 
     # If there are other timers on the queue, then we haven't had a pause
     # in activity for push_wait time yet.
-    return if @{ $self->push_timers };
+    return if $self->push_timers->count > 0;
 
     # Do the commit
     $log->infof( "[GACW] '%s' git push", $self->path );
