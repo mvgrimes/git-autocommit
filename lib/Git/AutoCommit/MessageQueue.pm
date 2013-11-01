@@ -12,10 +12,12 @@ use Data::Printer;
 use Log::Any qw($log);
 use Sys::Hostname;
 use AnyEvent::RabbitMQ;
+use Promises qw( collect deferred );
 use JSON;
 
 has mq => ( is => 'ro', builder => 1, );
 has channel => ( is => 'rw', );    # isa => 'AnyEvent::RabbitMQ::Channel', );
+has exchange_delared => ( is => 'rw', isa => Bool, default => sub { 0 } );
 
 has host     => ( is => 'ro', isa => Str, default => sub { 'localhost' } );
 has port     => ( is => 'ro', isa => Int, default => sub { 5672 } );
@@ -25,16 +27,19 @@ has vhost    => ( is => 'ro', isa => Str, default => sub { '/' } );
 has exchange => ( is => 'ro', isa => Str, default => sub { 'test_exchange' } );
 
 has id => ( is => 'ro', isa => Str, builder => 1, lazy => 1, );
-has is_openning ( is => 'rw', isa => Bool, default => sub { 0 } );
+
+# TODO: retry on failures
 
 # To publish:
 # Create AnyEvent::RabbitMQ
-# Open Channel
+# Connect unless $mq->is_open
+# Open Channel unless $channel && $channel->is_open
 # Declare Exchange
 # Publish
 
 # To subscribe:
 # Create AnyEvent::RabbitMQ
+# Connect
 # Open Channel
 # Declare Exchange
 # Declare Queue
@@ -55,75 +60,75 @@ sub _build_id {
 
 # Publish and Consume: Connect, Open Channel and Create Exchange
 
-sub _connect {
+sub connect {
     my ( $self, $args ) = @_;
 
     $log->debugf("[GAMQ] connecting to MQ");
 
-    $self->mq->load_xml_spec->connect(
-        host  => $self->host,
-        port  => $self->port,
-        user  => $self->user,
-        pass  => $self->pass,
-        vhost => $self->vhost,
-        ## exhange    => 'foo',
-        on_success => sub {
-            $log->debugf("[GAMQ] connected");
-            $args->{cb}->() if $args->{cb};
-        },
-        on_failure => sub {
-            $log->debugf("[GAMQ] connect failed");
-            die "Unable to connect: @_";
-        },
-    );
+    my $d = deferred;
+
+    if ( not $self->mq->is_open ) {
+        $self->mq->load_xml_spec->connect(
+            host  => $self->host,
+            port  => $self->port,
+            user  => $self->user,
+            pass  => $self->pass,
+            vhost => $self->vhost,
+            ## exhange    => 'foo',
+            on_success => sub {
+                $log->debugf("[GAMQ] connected");
+                $d->resolve;
+            },
+            on_failure => sub {
+                $log->warnf("[GAMQ] connect failed: %s", p @_);
+                $d->reject;
+            },
+        );
+    } else {
+        $d->resolve;
+    }
+
+    return $d->promise;
 }
 
 sub open_channel {
     my ( $self, $args ) = @_;
 
-    if ( $self->mq->is_open ) {
-        $self->_open_channel($args);
-    } else {
-        $self->_connect( {
-                cb => sub {
-                    $self->_open_channel($args);
-                  }
-            } );
-
-    }
-}
-
-sub _open_channel {
-    my ( $self, $args ) = @_;
-
     $log->debugf("[GAMQ] creating channel");
 
-    return if $self->is_opening;
+    my $d = deferred;
 
-    $self->mq->open_channel(
-        on_success => sub {
-            my $channel = shift;
-            $log->debugf("[GAMQ] open_channel succeeded");
-            $self->channel($channel);
-            $self->is_opening(0);
-            $args->{cb}->() if $args->{cb};
-        },
-        on_failure => sub {
-            $log->debugf("[GAMQ] open_channel failed");
-            $self->is_opening(0);
-            die "Unable to open channel";
-        },
-        on_close => sub {
-            my $method_frame = shift->method_frame;
+    if ( ! $self->channel or ! $self->channel->is_open ) {
+        $self->mq->open_channel(
+            on_success => sub {
+                my $channel = shift;
+                $log->debugf("[GAMQ] open_channel succeeded");
+                $self->channel($channel);
+                $d->resolve;
+            },
+            on_failure => sub {
+                $log->warnf("[GAMQ] open_channel failed");
+                die "Unable to open channel";
+                $d->reject;
+            },
+            on_close => sub {
+                my $method_frame = shift->method_frame;
 
-            $log->warnf( "[GAMQ] channel closed (%s): %s",
-                $method_frame->reply_code, $method_frame->reply_text );
+                $log->warnf(
+                    "[GAMQ] channel closed (%s): %s",
+                    $method_frame->reply_code,
+                    $method_frame->reply_text
+                );
 
-            $self->channel(undef);
-            $self->is_opening(0);
-        },
-    );
+                $self->channel(undef);
+                ## TODO: $d->?
+            },
+        );
+    } else {
+        $d->resolve;
+    }
 
+    return $d->promise;
 }
 
 sub declare_exchange {
@@ -131,57 +136,40 @@ sub declare_exchange {
 
     $log->debugf("[GAMQ] delaring exchange");
 
-    if ( $self->channel && $self->channel->is_open ) {
-        $self->_declare_exchange($args);
+    my $d = deferred;
+
+    if ( not $self->exchange_delared ) {
+
+        $self->channel->declare_exchange(
+            exchange   => $self->exchange,
+            type       => 'topic',
+            on_success => sub {
+                $log->debugf("[GAMQ] declare_exchange succeeded");
+                $self->exchange_delared(1);
+                $d->resolve;
+            },
+            on_failure => sub {
+                $log->warnf("[GAMQ] declare_exchange failed");
+                die "Unable to declare exchange";
+                $d->reject;
+            },
+        );
     } else {
-        $self->open_channel( {
-                cb => sub {
-                    $self->_declare_exchange($args);
-                  }
-            } );
+        $d->resolve;
     }
-}
 
-sub _declare_exchange {
-    my ( $self, $args ) = @_;
-
-    $self->channel->declare_exchange(
-        exchange   => $self->exchange,
-        type       => 'topic',
-        on_success => sub {
-            $log->debugf("[GAMQ] declare_exchange succeeded");
-            $args->{cb}->() if $args->{cb};
-        },
-        on_failure => sub {
-            $log->debugf("[GAMQ] declare_exchange failed");
-            die "Unable to declare exchange";
-        },
-    );
+    return $d->promise;
 }
 
 # Publish
 
-sub publish {
-    my ( $self, $message ) = @_;
+sub _publish {
+    my ( $self, $message, $topic ) = @_;
 
     my $json = JSON->new;
     my $msg = $json->encode( ref $message ? $message : [$message] );
 
     $log->debugf("[GAMQ] sending message: $msg");
-
-    if ( $self->channel && $self->channel->is_open ) {
-        $self->_publish($msg);
-    } else {
-        $self->declare_exchange( {
-                cb => sub {
-                    $self->_publish($msg);
-                  }
-            } );
-    }
-}
-
-sub _publish {
-    my ( $self, $message, $topic ) = @_;
 
     my $topic_str = sprintf "%s.%s", 'gamq', ( $topic // 'general' );
 
@@ -189,8 +177,24 @@ sub _publish {
         exchange    => $self->exchange,
         routing_key => $topic_str,
         header      => { headers => { publisher => $self->id } },
-        body        => $message,
+        body        => $msg,
     );
+}
+
+sub publish {
+    my ( $self, $message ) = @_;
+
+    #<<<
+    collect(
+        $self->connect
+      )->then(
+        sub { collect( $self->open_channel ) }
+      )->then(
+        sub { collect( $self->declare_exchange ) }
+      )->then(
+        sub { $self->_publish($message) }
+      );
+    #>>>
 }
 
 # Create Queue, Bind and Consume
@@ -198,25 +202,9 @@ sub _publish {
 sub declare_queue {
     my ( $self, $args ) = @_;
 
-    $log->debugf( '[GAMQ] declare_queue self '. $self );
-    $log->debugf( '[GAMQ] declare_queue channel %s is open %s',
-        $self->channel // 'undef', $self->channel && $self->channel->is_open // 'undef');
-
-    if ( $self->channel && $self->channel->is_open ) {
-        $self->_declare_queue($args);
-    } else {
-        $self->declare_exchange( {
-                cb => sub {
-                    $self->_declare_queue($args);
-                  }
-            } );
-    }
-}
-
-sub _declare_queue {
-    my ( $self, $args ) = @_;
-
     $log->debugf("[GAMQ] building queue");
+
+    my $d = deferred;
 
     $self->channel->declare_queue(
         ## exclusive => 1,
@@ -228,61 +216,53 @@ sub _declare_queue {
         on_success  => sub {
             my $method = shift;
             my $queue  = $method->method_frame->queue;
+
             $log->debugf("[GAMQ] declare_queue succeeded: $queue");
-
-            $args->{queue} = $queue;
-
-            # queue must always be bound, so let the bind method call the
-            # original cb if/when successful
-
-            $self->bind_queue_to_exchange($args);
+            $d->resolve($queue);
         },
         on_failure => sub {
-            $log->debugf("[GAMQ] declare_queue failed");
+            $log->warnf("[GAMQ] declare_queue failed");
             die "Unable to open channel";
+            $d->reject;
+
         },
     );
+
+    return $d->promise;
 }
 
 sub bind_queue_to_exchange {
-    my ( $self, $args ) = @_;
+    my ( $self, $queue, $topic ) = @_;
 
-    my $topic_str = sprintf "%s.%s", 'gamq', ( $args->{topic} // '#' );
-    $log->debugf( "[GAMQ] binding queue to exchange (%s) w/ topic %s",
-        $self->exchange, $topic_str );
+    my $topic_str = sprintf "%s.%s", 'gamq', ( $topic // '#' );
+    $log->debugf( "[GAMQ] binding queue %s to exchange (%s) w/ topic %s",
+        $queue, $self->exchange, $topic_str );
+
+    my $d = deferred;
 
     $self->channel->bind_queue(
-        queue       => $args->{queue},
+        queue       => $queue,
         exchange    => $self->exchange,
         routing_key => $topic_str,
         on_success  => sub {
-            $log->debugf("[GAMQ] bind_queue succeeded");
-            $args->{cb}->() if $args->{cb};
+            $log->debugf("[GAMQ] bind_queue succeeded: $queue");
+            $d->resolve( $queue );
         },
         on_failure => sub {
-            $log->debugf("[GAMQ] bind_queue failed");
+            $log->warnf("[GAMQ] bind_queue failed");
             die "Unable to bind_queue";
+            $d->reject;
         },
     );
-}
 
-sub subscribe {
-    my ( $self, $args ) = @_;
-
-    $log->debugf("[GAMQ] creating consumer");
-
-    $self->declare_queue( {
-            cb => sub {
-                $self->_create_consumer($args);
-              }
-        } );
+    return $d->promise;
 }
 
 sub _create_consumer {
-    my ( $self, $args ) = @_;
+    my ( $self, $queue, $args ) = @_;
 
     $self->channel->consume(
-        queue  => $args->{queue},
+        queue  => $queue,
         no_ack => 1,
         ## consumer_tag => ,
         on_consume => sub {
@@ -303,7 +283,7 @@ sub _create_consumer {
 
             my $publisher = $frame->{header}->headers->{publisher};
 
-            if ( $args->{ignore_self} and $publisher eq $self->id ) {
+            if ( $args->{ignore_own} and $publisher eq $self->id ) {
                 $log->debugf("[GAMQ] skipping msg from self");
             } else {
                 $args->{cb}->($msg) if $args->{cb};
@@ -311,11 +291,48 @@ sub _create_consumer {
         },
         on_success => sub {
             $log->debugf("[GAMQ] on_consume succeeded");
+            $args->{on_success}->( $queue ) if $args->{on_success};
         },
         on_failure => sub {
-            $log->debugf("[GAMQ] on_consume failed");
+            $log->warnf("[GAMQ] on_consume failed");
+            $args->{on_failure}->( $queue ) if $args->{on_failure};
             die "Unable to open channel";
-        } );
+        },
+        on_cancel => sub {
+            $log->warnf("[GAMQ] on_consume cancelled");
+            # TODO: try to resubscribe after a wait
+        },
+    );
+}
+
+sub subscribe {
+    my ( $self, $args ) = @_;
+
+    $log->debugf("[GAMQ] creating consumer");
+
+    #<<<
+    collect(
+        $self->connect
+      )->then(
+        sub { collect( $self->open_channel ) }
+      )->then(
+        sub { collect( $self->declare_exchange ) }
+      )->then(
+        sub { collect( $self->declare_queue ) }
+      )->then(
+        sub {
+            my $delcare_queue_rv = shift;
+            my $queue = shift @$delcare_queue_rv;
+            collect( $self->bind_queue_to_exchange( $queue, $args->{topic} ) );
+          }
+      )->then(
+        sub {
+            my $bind_queue_rv = shift;
+            my $queue = shift @$bind_queue_rv;
+            $self->_create_consumer( $queue, $args );
+          }
+      );
+    #>>>
 }
 
 1;

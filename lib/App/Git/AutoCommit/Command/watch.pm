@@ -64,6 +64,7 @@ sub execute {
             $repo, $repo_config->{path} );
         my $watcher = Git::AutoCommit::FileWatcher->new($repo_config);
 
+        my $cv = AnyEvent->condvar;
         $mq->subscribe( {
                 cb => sub {
                     my $msg     = shift;
@@ -72,11 +73,16 @@ sub execute {
                       $msg->{action},
                       ( exists $msg->{path} ? $msg->{path} : $msg->{message} );
                     notify( 'Git AutoCommit', $subject );
-                  }
+                  },
+                  on_success => sub {
+                      $log->debugf("[AGAW] subscribed to repo 1");
+                      $cv->send(1);
+                  },
             } );
+        $cv->recv or die;
 
         $mq->subscribe( {
-                ignore_self => 1,
+                ## ignore_own => 1,
                 topic => 'pull',
                 cb => sub {
                     p @_;
@@ -86,7 +92,10 @@ sub execute {
                     #   $msg->{action},
                     #   ( exists $msg->{path} ? $msg->{path} : $msg->{message} );
                     # notify( 'Git AutoCommit', $subject );
-                  }
+                  },
+                  on_success => sub {
+                      $log->debugf("[AGAW] subscribed to repo 2");
+                  },
             } );
 
         push @watchers, $watcher;
