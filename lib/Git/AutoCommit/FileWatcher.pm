@@ -16,25 +16,22 @@ use Git::Wrapper;    # XXXX: Explore Git::Wrapper AnyEvent;
 
 # TODO: Could use VCI::VCS to support non-git vcs
 
-has path => ( is => 'ro', isa => Str, required => 1 );
-has git => ( is => 'ro', builder => 1, lazy => 1 );
+has path => ( is => 'ro', isa => Str, required => 1, );
+has git => ( is => 'ro', builder => 1, lazy => 1, );
 
-has file_watcher => ( is => 'ro', builder => 1, lazy => 1 );
+has file_watcher => ( is => 'ro', builder => 1, lazy => 1, );
 has on_add       => ( is => 'ro', isa     => CodeRef, );
 has on_rm        => ( is => 'ro', isa     => CodeRef, );
 
-has commit_wait => ( is => 'ro', isa => Int, default => 5 );
-has commit_timers => ( is => 'ro', default => sub { array } );
-has commit_messages => ( is => 'ro',  default => sub { array } );
-has on_commit => ( is => 'ro', isa => CodeRef, );
+has commit_wait => ( is => 'ro', isa => Int, default => 5, );
+has commit_timers   => ( is => 'ro', default => sub { array }, );
+has commit_messages => ( is => 'ro', default => sub { array }, );
+has on_commit       => ( is => 'ro', isa     => CodeRef, );
 
-has pushable => ( is => 'ro', isa => Bool, builder => 1, lazy => 1 );
-has push_wait => ( is => 'ro', isa => Int, default => 5 );
-has push_timers => ( is => 'ro',  default => sub { array } );
+has pushable => ( is => 'ro', isa => Bool, builder => 1, lazy => 1, );
+has push_wait => ( is => 'ro', isa => Int, default => 5, );
+has push_timers => ( is => 'ro', default => sub { array }, );
 has on_push => ( is => 'ro', isa => CodeRef, );
-
-sub _on {
-}
 
 sub _build_file_watcher {
     my ($self) = @_;
@@ -86,18 +83,19 @@ sub on_filesys_change {
             $self->path, $action, $event->path );
         $self->git->$action( $event->path );
 
-        $self->$on_action->( $self->path, $event->path, $action )
+        $self->$on_action->(
+            { repos => $self->path, path => $event->path, action => $action } )
           if $self->$on_action;
 
         # Add a message to queue for the next commit
         my $msg = sprintf "%s %s", $event->type, $event->path;
-        $self->commit_messages->push( $msg );
+        $self->commit_messages->push($msg);
 
         # Start count down timer to commit
         my $w = AnyEvent->timer(
             after => $self->commit_wait,
             cb    => sub { $self->do_commit } );
-        $self->commit_timers->push( $w );
+        $self->commit_timers->push($w);
     }
 }
 
@@ -128,7 +126,9 @@ sub do_commit {
 
     try {
         $self->git->commit( { message => $msg } );
-        $self->on_commit->( $self->path, $msg ) if $self->on_commit;
+        $self->on_commit->(
+            { repos => $self->path, message => $msg, action => 'commit', } )
+          if $self->on_commit;
     }
     catch {
         # TODO: What if conflict?
@@ -144,7 +144,7 @@ sub do_commit {
     my $push_timer = AnyEvent->timer(
         after => $self->push_wait,
         cb    => sub { $self->do_push } );
-    $self->push_timers->push( $push_timer );
+    $self->push_timers->push($push_timer);
 }
 
 sub do_push {
@@ -164,11 +164,17 @@ sub do_push {
     $log->infof( "[GACW] '%s' git push", $self->path );
     try {
         $self->git->push();
-        $self->on_push->( $self->path ) if $self->on_push;
+        $self->on_push->( { repos => $self->path, action => 'push', } )
+          if $self->on_push;
     }
     catch {
         die p $_;
     };
+}
+
+sub do_pull {
+    my ($self) = @_;
+
 }
 
 sub BUILD {

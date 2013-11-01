@@ -12,6 +12,7 @@ use AnyEvent::Filesys::Notify;
 use App::Git::AutoCommit -command;
 use Git::AutoCommit::FileWatcher;
 use Git::AutoCommit::MessageQueue;
+use Growl::Tiny;
 use Config::General;
 use Data::Printer;
 use Log::Any qw($log);
@@ -35,7 +36,7 @@ use Log::Any qw($log);
 sub execute {
     my ( $self, $opt, $args ) = @_;
 
-    my $config = $self->get_config($opt);
+    my $config       = $self->get_config($opt);
     my $repositories = $config->{Repositories};
     die "No Repositories specified in config file\n"
       unless $repositories && ref $repositories eq "HASH";
@@ -51,16 +52,28 @@ sub execute {
         my $mq = Git::AutoCommit::MessageQueue->new();
 
         # Merge the global config with the Repository specific config
-        my $json = JSON->new;
-        my $repo_config =
-          { %{ $config->{Global} // {} }, %{ $repositories->{$repo} },
-              on_commit => sub { $mq->publish( $json->encode( \@_ ) ) },
-              on_push => sub { $mq->publish( $json->encode( \@_ ) ) },
-          };
+        my $repo_config = {
+            %{ $config->{Global} // {} }, %{ $repositories->{$repo} },
+            on_commit => sub { $mq->publish( shift, 'commit' ) },
+            on_push   => sub { $mq->publish( shift, 'push' ) },
+            on_add    => sub { $mq->publish( shift, 'add' ) },
+            on_rm     => sub { $mq->publish( shift, 'rm' ) },
+        };
 
-        $log->debugf( "[AGAW] '%s' watching path: %s", $repo,
-            $repo_config->{path} );
+        $log->debugf( "[AGAW] '%s' watching path: %s",
+            $repo, $repo_config->{path} );
         my $watcher = Git::AutoCommit::FileWatcher->new($repo_config);
+
+        $mq->subscribe( {
+                cb => sub {
+                    my $msg     = shift;
+                    my $subject = sprintf "Repository %s event: %s\n%s",
+                      $msg->{repos},
+                      $msg->{action},
+                      ( exists $msg->{path} ? $msg->{path} : $msg->{message} );
+                    notify( 'Git AutoCommit', $subject );
+                  }
+            } );
 
         push @watchers, $watcher;
     }
@@ -68,6 +81,20 @@ sub execute {
     # Enter event loop
     my $condvar = AnyEvent->condvar;
     $condvar->recv;
+}
+
+sub notify {
+    my ( $title, $subject ) = @_;
+
+    Growl::Tiny::notify( {
+        title    => $title,
+        subject  => $subject,
+        priority => 3,
+        sticky   => 0,
+        host     => 'localhost',
+        ## image    => '/path/to/image.png',
+    } );
+
 }
 
 1;

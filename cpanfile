@@ -19,6 +19,7 @@ requires 'Log::Any',                              '0.15';
 requires 'Log::Any::Adapter',                     '0.11';
 requires 'Log::Any::Adapter::ScreenColoredLevel', '0.04';
 requires 'Config::General',                       '2.52';
+requires 'Growl::Tiny',                       '0.0.4';
 
 # requires 'Path::Class',   '0.32';
 # requires 'DBD::SQLite',                '0';

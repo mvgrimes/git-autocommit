@@ -27,6 +27,8 @@ has pass     => ( is => 'ro', isa => Str, default => sub { 'guest' } );
 has vhost    => ( is => 'ro', isa => Str, default => sub { '/' } );
 has exchange => ( is => 'ro', isa => Str, default => sub { 'test_exchange' } );
 
+has id => ( is => 'ro', isa => Str, builder => 1, lazy => 1, );
+
 # To publish:
 # Create AnyEvent::RabbitMQ
 # Open Channel
@@ -46,6 +48,11 @@ sub _build_mq {
 
     $log->debugf("[GAMQ] creating AnyEvent::RabbitmQ");
     return AnyEvent::RabbitMQ->new;
+}
+
+sub _build_id {
+    my ($self) = @_;
+    sprintf( "%s.%s", hostname, $$ );
 }
 
 # sub _build_queue_name {
@@ -163,17 +170,17 @@ sub _declare_exchange {
 sub publish {
     my ( $self, $message ) = @_;
 
-    $log->debugf("[GAMQ] sending message: $message");
+    my $json = JSON->new;
+    my $msg = $json->encode( ref $message ? $message : [$message] );
 
-    # my $json = JSON->new;
-    # my $body = $json->encode( { message => $i, } );
+    $log->debugf("[GAMQ] sending message: $msg");
 
     if ( $self->channel && $self->channel->is_open ) {
-        $self->_publish($message);
+        $self->_publish($msg);
     } else {
         $self->declare_exchange( {
                 cb => sub {
-                    $self->_publish($message);
+                    $self->_publish($msg);
                   }
             } );
     }
@@ -187,8 +194,8 @@ sub _publish {
     $self->channel->publish(
         exchange    => $self->exchange,
         routing_key => $topic_str,
-        header => { headers => { publisher => sprintf "%s.%s", hostname, $$ } },
-        body   => $message,
+        header      => { headers => { publisher => $self->id } },
+        body        => $message,
     );
 }
 
@@ -287,24 +294,27 @@ sub _create_consumer {
             my ($frame) = @_;
             my $body = $frame->{body}->payload;
 
-            # p $frame;
-            ## my $reply_to = $frame->{header}->reply_to;
-            my $topic = $frame->{deliver}->method_frame->routing_key;
-            ## return if $reply_to && $reply_to eq $self->_rf_queue;
-            $log->infof( "[GAMQ] topic is %s", $topic );
+            $log->debugf( "[GAMQ] receved msg: " . $body );
 
-            if ( $frame->{header}->headers->{publisher} eq
-                sprintf( "%s.%s", hostname, $$ ) )
-            {
+            my $json = JSON->new;
+            my $msg  = $json->decode($body);
+
+            ## p $frame;
+            ## my $reply_to = $frame->{header}->reply_to;
+            ## return if $reply_to && $reply_to eq $self->_rf_queue;
+            my $topic = $frame->{deliver}->method_frame->routing_key;
+            $log->infof( "[GAMQ] topic is %s", $topic );
+            my $publisher = $frame->{header}->headers->{publisher};
+
+            if ( $publisher eq $self->id ) {
                 $log->debugf("[GAMQ] skipping msg from self");
+                $args->{cb}->($msg) if $args->{cb}; # XXXX: testing
             } else {
-                $log->debugf( "[GAMQ] receved msg: " . $body );
-                $args->{cb}->($body) if $args->{cb};
+                $args->{cb}->($msg) if $args->{cb};
             }
         },
         on_success => sub {
             $log->debugf("[GAMQ] on_consume succeeded");
-            $args->{cb}->() if $args->{cb};
         },
         on_failure => sub {
             $log->debugf("[GAMQ] on_consume failed");
