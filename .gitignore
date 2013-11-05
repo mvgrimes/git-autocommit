@@ -23,7 +23,7 @@ Git-AutoCommit-*
 # Temporary/experimental
 exp/
 tmp/
-test/
+test*/
 
 # podweaver backups
 *.pm.bak
