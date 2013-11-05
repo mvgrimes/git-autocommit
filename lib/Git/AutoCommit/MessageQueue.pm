@@ -182,7 +182,7 @@ sub _publish {
 }
 
 sub publish {
-    my ( $self, $message ) = @_;
+    my ( $self, $message, $topic ) = @_;
 
     #<<<
     collect(
@@ -192,7 +192,7 @@ sub publish {
       )->then(
         sub { collect( $self->declare_exchange ) }
       )->then(
-        sub { $self->_publish($message) }
+        sub { $self->_publish($message, $topic) }
       );
     #>>>
 }

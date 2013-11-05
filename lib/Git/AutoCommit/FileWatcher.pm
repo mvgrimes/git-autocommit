@@ -12,6 +12,7 @@ use Data::Dump qw(pp);
 use Data::Printer;
 use Log::Any qw($log);
 use Sys::Hostname;
+use Carp;
 use Git::Wrapper;    # XXXX: Explore Git::Wrapper AnyEvent;
 
 # TODO: Could use VCI::VCS to support non-git vcs
@@ -32,6 +33,7 @@ has pushable => ( is => 'ro', isa => Bool, builder => 1, lazy => 1, );
 has push_wait => ( is => 'ro', isa => Int, default => 5, );
 has push_timers => ( is => 'ro', default => sub { array }, );
 has on_push => ( is => 'ro', isa => CodeRef, );
+has on_pull => ( is => 'ro', isa => CodeRef, );
 
 sub _build_file_watcher {
     my ($self) = @_;
@@ -173,9 +175,26 @@ sub do_push {
     };
 }
 
+sub pull {
+    my ($self) = @_;
+
+    croak "Cannot pull without origin" unless $self->pushable;
+    $self->do_pull;
+}
+
 sub do_pull {
     my ($self) = @_;
 
+    # Do the commit
+    $log->infof( "[GACW] '%s' git pull", $self->path );
+    try {
+        $self->git->pull();
+        $self->on_pull->( { repos => $self->path, action => 'pull', } )
+          if $self->on_pull;
+    }
+    catch {
+        die p $_;
+    };
 }
 
 sub BUILD {

@@ -17,6 +17,10 @@ use Config::General;
 use Data::Printer;
 use Log::Any qw($log);
 
+# TODO: make sure only one watcher for each repo
+# TODO: retry connection to MQ if they are dropped
+# TODO: deal with merge conflicts
+
 # sub usage_desc { "watch %o" }
 
 # sub opt_spec {
@@ -66,6 +70,8 @@ sub execute {
 
         my $cv = AnyEvent->condvar;
         $mq->subscribe( {
+                # TODO: needs include_only_own or just drop the MQ and use
+                # notify directly
                 cb => sub {
                     my $msg     = shift;
                     my $subject = sprintf "Repository %s event: %s\n%s",
@@ -82,16 +88,19 @@ sub execute {
         $cv->recv or die;
 
         $mq->subscribe( {
-                ## ignore_own => 1,
-                topic => 'pull',
+                ignore_own => 1,
+                topic => 'push',
                 cb => sub {
+                    # TODO: ignore changes while we pull
                     p @_;
-                    # my $msg     = shift;
-                    # my $subject = sprintf "Repository %s event: %s\n%s",
-                    #   $msg->{repos},
-                    #   $msg->{action},
-                    #   ( exists $msg->{path} ? $msg->{path} : $msg->{message} );
-                    # notify( 'Git AutoCommit', $subject );
+                    my $msg     = shift;
+                    $watcher->pull();
+                    my $subject = sprintf "Pulling %s following: %s %s\n%s",
+                      $watcher->path,
+                      $msg->{repos},
+                      $msg->{action},
+                      ( exists $msg->{path} ? $msg->{path} : $msg->{message} );
+                    notify( 'Git AutoCommit', $subject );
                   },
                   on_success => sub {
                       $log->debugf("[AGAW] subscribed to repo 2");
