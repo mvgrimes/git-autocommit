@@ -20,6 +20,7 @@ use Log::Any qw($log);
 # TODO: make sure only one watcher for each repo
 # TODO: retry connection to MQ if they are dropped
 # TODO: deal with merge conflicts
+# TODO: add and commit all changes (add -A) on start (maybe after pull)
 
 # sub usage_desc { "watch %o" }
 
@@ -58,42 +59,27 @@ sub execute {
         # Merge the global config with the Repository specific config
         my $repo_config = {
             %{ $config->{Global} // {} }, %{ $repositories->{$repo} },
-            on_commit => sub { $mq->publish( shift, 'commit' ) },
-            on_push   => sub { $mq->publish( shift, 'push' ) },
-            on_add    => sub { $mq->publish( shift, 'add' ) },
-            on_rm     => sub { $mq->publish( shift, 'rm' ) },
+            on_add    => sub { notify_of_event(shift) },
+            on_rm     => sub { notify_of_event(shift) },
+            on_commit => sub { notify_of_event(shift) },
+            on_push   => sub {
+                my $event = shift;
+                notify_of_event($event);
+                $mq->publish( $event, 'push' );
+            },
         };
 
         $log->debugf( "[AGAW] '%s' watching path: %s",
             $repo, $repo_config->{path} );
         my $watcher = Git::AutoCommit::FileWatcher->new($repo_config);
+        push @watchers, $watcher;
 
         my $cv = AnyEvent->condvar;
         $mq->subscribe( {
-                # TODO: needs include_only_own or just drop the MQ and use
-                # notify directly
-                cb => sub {
-                    my $msg     = shift;
-                    my $subject = sprintf "Repository %s event: %s\n%s",
-                      $msg->{repos},
-                      $msg->{action},
-                      ( exists $msg->{path} ? $msg->{path} : $msg->{message} );
-                    notify( 'Git AutoCommit', $subject );
-                  },
-                  on_success => sub {
-                      $log->debugf("[AGAW] subscribed to repo 1");
-                      $cv->send(1);
-                  },
-            } );
-        $cv->recv or die;
-
-        $mq->subscribe( {
                 ignore_own => 1,
-                topic => 'push',
-                cb => sub {
-                    # TODO: ignore changes while we pull
-                    p @_;
-                    my $msg     = shift;
+                topic      => 'push',
+                cb         => sub {
+                    my $msg = shift;
                     $watcher->pull();
                     my $subject = sprintf "Pulling %s following: %s %s\n%s",
                       $watcher->path,
@@ -101,18 +87,28 @@ sub execute {
                       $msg->{action},
                       ( exists $msg->{path} ? $msg->{path} : $msg->{message} );
                     notify( 'Git AutoCommit', $subject );
-                  },
-                  on_success => sub {
-                      $log->debugf("[AGAW] subscribed to repo 2");
-                  },
+                },
+                on_success => sub {
+                    $log->debugf("[AGAW] subscribed to mq");
+                    $cv->send(1);
+                },
             } );
-
-        push @watchers, $watcher;
+        $cv->recv or die;
     }
 
     # Enter event loop
     my $condvar = AnyEvent->condvar;
     $condvar->recv;
+}
+
+sub notify_of_event {
+    my $event   = shift;
+    no warnings 'uninitialized';
+    my $subject = sprintf "Repository %s event: %s\n%s",
+      $event->{repos},
+      $event->{action},
+      ( exists $event->{path} ? $event->{path} : $event->{message} );
+    notify( 'Git AutoCommit', $subject );
 }
 
 sub notify {

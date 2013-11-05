@@ -178,6 +178,7 @@ sub do_push {
 sub pull {
     my ($self) = @_;
 
+    # TODO: ignore changes while we pull
     croak "Cannot pull without origin" unless $self->pushable;
     $self->do_pull;
 }
