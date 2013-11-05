@@ -21,22 +21,7 @@ use Log::Any qw($log);
 # TODO: retry connection to MQ if they are dropped
 # TODO: deal with merge conflicts
 # TODO: add and commit all changes (add -A) on start (maybe after pull)
-
-# sub usage_desc { "watch %o" }
-
-# sub opt_spec {
-#     my ($self) = @_;
-#     #<<<
-#     return (
-#         ## []
-#         $self->next::method,
-#     );
-#     #>>>
-# }
-
-# sub validate_args {
-#     my ( $self, $opt, $args ) = @_;
-# }
+# TODO: ignore files in gitignore
 
 sub execute {
     my ( $self, $opt, $args ) = @_;
@@ -58,7 +43,8 @@ sub execute {
 
         # Merge the global config with the Repository specific config
         my $repo_config = {
-            %{ $config->{Global} // {} }, %{ $repositories->{$repo} },
+            %{ $config->{Global} // {} },
+            %{ $repositories->{$repo} },
             on_add    => sub { notify_of_event(shift) },
             on_rm     => sub { notify_of_event(shift) },
             on_commit => sub { notify_of_event(shift) },
@@ -102,7 +88,7 @@ sub execute {
 }
 
 sub notify_of_event {
-    my $event   = shift;
+    my $event = shift;
     no warnings 'uninitialized';
     my $subject = sprintf "Repository %s event: %s\n%s",
       $event->{repos},
@@ -124,5 +110,27 @@ sub notify {
     } );
 
 }
+
+=pod comment
+
+# To extend App::Cmd
+
+sub usage_desc { "watch %o" }
+
+sub opt_spec {
+    my ($self) = @_;
+    #<<<
+    return (
+        ## []
+        $self->next::method,
+    );
+    #>>>
+}
+
+sub validate_args {
+    my ( $self, $opt, $args ) = @_;
+}
+
+=cut
 
 1;

@@ -3,6 +3,7 @@ requires 'perl', '5.014';
 requires 'App::Cmd', '0.32';
 requires 'AnyEvent';
 requires 'AnyEvent::Filesys::Notify';
+requires 'AnyEvent::Retry', '0.03';
 requires 'Promises', '0.04';
 requires 'Data::Dump';
 requires 'IPC::Cmd';
